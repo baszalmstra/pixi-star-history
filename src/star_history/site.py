@@ -58,9 +58,9 @@ def add_repository(fig: go.Figure, repository: str, rows: list[StarRow]) -> date
     label = LABELS[repository]
     latest_day = dates[-1]
     future_dates = [latest_day + timedelta(days=offset) for offset in range(FORECAST_DAYS + 1)]
-    predicted = np.concatenate(([values[-1]], result.predicted))
-    lower = np.concatenate(([values[-1]], result.lower))
-    upper = np.concatenate(([values[-1]], result.upper))
+    predicted = np.rint(np.concatenate(([values[-1]], result.predicted)))
+    lower = np.rint(np.concatenate(([values[-1]], result.lower)))
+    upper = np.rint(np.concatenate(([values[-1]], result.upper)))
 
     fig.add_trace(
         go.Scatter(
