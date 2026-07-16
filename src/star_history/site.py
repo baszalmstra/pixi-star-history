@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, timedelta
 from html import escape
 from pathlib import Path
@@ -27,6 +28,13 @@ LABELS = {
 FORECAST_DAYS = 183
 
 
+@dataclass(frozen=True)
+class ChartAnalysis:
+    figure: go.Figure
+    forecasts: dict[str, Forecast]
+    crossovers: list[Crossover]
+
+
 def rgba(hex_color: str, alpha: float) -> str:
     values = tuple(int(hex_color[index : index + 2], 16) for index in (1, 3, 5))
     return f"rgba({values[0]}, {values[1]}, {values[2]}, {alpha})"
@@ -44,12 +52,6 @@ def daily_series(rows: list[StarRow]) -> tuple[list[date], np.ndarray, list[str]
     observations = [exact[day].observation if day in exact else "estimated" for day in dates]
     changes = np.diff(np.concatenate(([0.0], values)))
     return dates, values, observations, changes
-
-
-def model_summary(result: Forecast) -> str:
-    strongest = sorted(result.weights.items(), key=lambda item: item[1], reverse=True)[:3]
-    weights = " · ".join(f"{name} {weight:.0%}" for name, weight in strongest)
-    return f"30-day backtest RMSE: ±{result.backtest_rmse:,.0f} stars<br>{weights}"
 
 
 def add_repository(
@@ -90,7 +92,10 @@ def add_repository(
         )
     )
 
-    historical_custom = np.column_stack((changes.astype(int), observations))
+    source_labels = np.array(
+        ["estimated" if observation == "estimated" else "observed" for observation in observations]
+    )
+    historical_custom = np.column_stack((changes.astype(int), source_labels))
     fig.add_trace(
         go.Scatter(
             x=dates,
@@ -100,11 +105,9 @@ def add_repository(
             line={"color": color, "width": 2.4},
             customdata=historical_custom,
             hovertemplate=(
-                f"<b>{label}</b><br>"
-                "%{x|%e %b %Y}<br>"
-                "%{y:,.0f} stars<br>"
-                "%{customdata[0]:+,.0f} daily change<br>"
-                "Source: %{customdata[1]}<extra></extra>"
+                f"<b>{label}</b> · %{{y:,.0f}} stars<br>"
+                "%{customdata[0]:+,.0f} that day · %{customdata[1]}"
+                "<extra></extra>"
             ),
             legendgroup=repository,
         )
@@ -122,17 +125,13 @@ def add_repository(
                 "size": 5,
             },
             name=f"{label} observations",
-            hovertemplate=(
-                f"<b>{label} observed count</b><br>"
-                "%{x|%e %b %Y}<br>%{y:,.0f} stars<extra></extra>"
-            ),
+            hoverinfo="skip",
             showlegend=False,
             legendgroup=repository,
         )
     )
 
     forecast_custom = np.column_stack((lower, upper))
-    summary = model_summary(result)
     fig.add_trace(
         go.Scatter(
             x=future_dates,
@@ -141,11 +140,9 @@ def add_repository(
             line={"color": color, "width": 2.2, "dash": "dash"},
             customdata=forecast_custom,
             hovertemplate=(
-                f"<b>{label} forecast</b><br>"
-                "%{x|%e %b %Y}<br>"
-                "%{y:,.0f} predicted stars<br>"
-                "95% range: %{customdata[0]:,.0f}–%{customdata[1]:,.0f}<br>"
-                f"{summary}<extra></extra>"
+                f"<b>{label}</b> · %{{y:,.0f}} forecast<br>"
+                "95% range %{customdata[0]:,.0f}–%{customdata[1]:,.0f}"
+                "<extra></extra>"
             ),
             showlegend=False,
             legendgroup=repository,
@@ -198,13 +195,9 @@ def add_crossovers(fig: go.Figure, crossovers: list[Crossover]) -> None:
                     ]
                 ],
                 hovertemplate=(
-                    f"<b>{challenger} probably overtakes {incumbent}</b><br>"
-                    "Median date: %{x|%e %b %Y}<br>"
-                    "%{customdata[0]:.0%} chance within six months<br>"
-                    "Conditional 95% range: %{customdata[1]}–%{customdata[2]}<br>"
-                    "Date σ: %{customdata[3]:.1f} days<br>"
-                    "Date variance: %{customdata[4]:.0f} days²<br>"
-                    "About %{y:,.0f} stars<extra></extra>"
+                    f"<b>{challenger} → {incumbent}</b><br>"
+                    "%{customdata[0]:.0%} chance within six months"
+                    "<extra></extra>"
                 ),
                 showlegend=False,
                 cliponaxis=False,
@@ -212,7 +205,7 @@ def add_crossovers(fig: go.Figure, crossovers: list[Crossover]) -> None:
         )
 
 
-def build_figure(rows: list[StarRow]) -> go.Figure:
+def build_figure(rows: list[StarRow]) -> ChartAnalysis:
     grouped: dict[str, list[StarRow]] = defaultdict(list)
     for row in rows:
         grouped[row.repository].append(row)
@@ -256,7 +249,12 @@ def build_figure(rows: list[StarRow]) -> go.Figure:
         plot_bgcolor="#fbfcfe",
         margin={"l": 62, "r": 28, "t": 22, "b": 58},
         hovermode="x unified",
-        hoverlabel={"bgcolor": "white", "font": {"family": "Inter, sans-serif", "size": 12}},
+        hoverlabel={
+            "align": "left",
+            "bgcolor": "white",
+            "bordercolor": "#dbe1ea",
+            "font": {"family": "Inter, sans-serif", "size": 12, "color": "#172033"},
+        },
         font={"family": "Inter, ui-sans-serif, system-ui, sans-serif", "color": "#172033"},
         legend={
             "orientation": "h",
@@ -269,6 +267,7 @@ def build_figure(rows: list[StarRow]) -> go.Figure:
         xaxis={
             "title": None,
             "showgrid": False,
+            "unifiedhovertitle": {"text": "<b>%{x|%e %b %Y}</b>"},
             "linecolor": "#dbe1ea",
             "rangeselector": {
                 "buttons": [
@@ -295,13 +294,71 @@ def build_figure(rows: list[StarRow]) -> go.Figure:
             "tickformat": ",~s",
         },
     )
-    return figure
+    return ChartAnalysis(
+        figure=figure,
+        forecasts={
+            repository: result for repository, (_, _, result) in repository_forecasts.items()
+        },
+        crossovers=crossovers,
+    )
+
+
+def compact_date(day: date, *, include_year: bool = False) -> str:
+    value = f"{day.day} {day.strftime('%b')}"
+    return f"{value} {day.year}" if include_year else value
+
+
+def render_crossover_summary(crossovers: list[Crossover]) -> str:
+    items: list[str] = []
+    for crossover in crossovers:
+        if crossover.probability < 0.10 or crossover.median_date is None:
+            continue
+        assert crossover.p05_date is not None
+        assert crossover.p95_date is not None
+        assert crossover.standard_deviation_days is not None
+        challenger = LABELS[crossover.challenger]
+        incumbent = LABELS[crossover.incumbent]
+        items.append(
+            '<div class="overtake">'
+            f'<strong>{challenger} <span aria-hidden="true">→</span> {incumbent}</strong>'
+            f'<span class="overtake-date">{compact_date(crossover.median_date, include_year=True)}</span>'
+            f'<span class="probability">{crossover.probability:.0%}</span>'
+            '<span class="range">'
+            f"95%: {compact_date(crossover.p05_date)}–{compact_date(crossover.p95_date)}"
+            f" · σ {crossover.standard_deviation_days:.1f}d"
+            "</span></div>"
+        )
+    return "".join(items) or '<span class="muted">No likely crossover within six months</span>'
+
+
+def render_model_details(forecasts: dict[str, Forecast], crossovers: list[Crossover]) -> str:
+    diagnostics: list[str] = []
+    for repository, result in forecasts.items():
+        strongest = sorted(result.weights.items(), key=lambda item: item[1], reverse=True)[:3]
+        weights = " · ".join(f"{name} {weight:.0%}" for name, weight in strongest)
+        diagnostics.append(
+            '<div class="diagnostic">'
+            f"<strong>{LABELS[repository]}</strong>"
+            f"<span>30-day backtest error ±{result.backtest_rmse:,.0f} stars</span>"
+            f"<span>{weights}</span>"
+            "</div>"
+        )
+    variances = []
+    for crossover in crossovers:
+        if crossover.probability < 0.10 or crossover.variance_days is None:
+            continue
+        variances.append(
+            f"{LABELS[crossover.challenger]} → {LABELS[crossover.incumbent]} "
+            f"date variance {crossover.variance_days:,.0f} days²"
+        )
+    variance_note = " · ".join(variances)
+    return "".join(diagnostics) + f'<p class="variance-note">{variance_note}</p>'
 
 
 def build_site(csv_path: Path = DEFAULT_CSV, output: Path = Path("site/index.html")) -> str:
     rows = read_rows(csv_path)
-    figure = build_figure(rows)
-    chart = figure.to_html(
+    analysis = build_figure(rows)
+    chart = analysis.figure.to_html(
         full_html=False,
         include_plotlyjs="cdn",
         div_id="star-history-plot",
@@ -313,6 +370,8 @@ def build_site(csv_path: Path = DEFAULT_CSV, output: Path = Path("site/index.htm
         },
     )
     latest = max(row.day for row in rows).isoformat()
+    crossover_summary = render_crossover_summary(analysis.crossovers)
+    model_details = render_model_details(analysis.forecasts, analysis.crossovers)
     page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -324,19 +383,44 @@ def build_site(csv_path: Path = DEFAULT_CSV, output: Path = Path("site/index.htm
     * {{ box-sizing: border-box; }}
     html, body {{ margin: 0; min-height: 100%; background: #fbfcfe; color: #172033; }}
     body {{ font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
-    main {{ min-height: 100vh; display: grid; grid-template-rows: auto minmax(560px, 1fr) auto; padding: 32px 4vw 20px; }}
-    header {{ display: flex; align-items: end; justify-content: space-between; gap: 24px; padding: 0 8px 18px; }}
+    main {{ min-height: 100vh; display: grid; grid-template-rows: auto auto minmax(560px, 1fr) auto auto; padding: 32px 4vw 20px; }}
+    header {{ display: flex; align-items: end; justify-content: space-between; gap: 24px; padding: 0 8px 14px; }}
     h1 {{ margin: 0; font-size: clamp(1.45rem, 3vw, 2.35rem); letter-spacing: -0.04em; font-weight: 650; }}
     .subtitle {{ margin: 7px 0 0; color: #64748b; font-size: 0.92rem; }}
-    .updated {{ color: #64748b; font-size: 0.78rem; white-space: nowrap; }}
+    .updated, .muted {{ color: #64748b; font-size: 0.78rem; white-space: nowrap; }}
+    .guide {{ margin: 0 0 10px; padding: 10px 14px; border: 1px solid #e2e7ee; border-radius: 12px; background: white; display: flex; align-items: center; justify-content: space-between; gap: 16px 28px; flex-wrap: wrap; color: #526079; font-size: 0.76rem; }}
+    .visual-key, .overtake-summary, .overtake {{ display: flex; align-items: center; gap: 7px 13px; flex-wrap: wrap; }}
+    .key-item {{ display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }}
+    .sample {{ display: inline-block; width: 18px; height: 8px; position: relative; flex: none; }}
+    .sample.history::before, .sample.forecast::before {{ content: ""; position: absolute; left: 0; right: 0; top: 4px; border-top: 2px solid #64748b; }}
+    .sample.forecast::before {{ border-top-style: dashed; }}
+    .sample.range {{ border-radius: 3px; background: rgba(37, 99, 235, 0.12); }}
+    .sample.anchor::before {{ content: ""; position: absolute; width: 6px; height: 6px; left: 6px; top: 1px; border: 1.5px solid #64748b; border-radius: 50%; background: white; }}
+    .sample.crossing::before {{ content: ""; position: absolute; width: 7px; height: 7px; left: 6px; top: 1px; background: #e59f00; transform: rotate(45deg); }}
+    .guide-label {{ color: #172033; font-weight: 650; }}
+    .overtake {{ gap: 6px; padding-left: 12px; border-left: 1px solid #e2e7ee; }}
+    .overtake strong {{ color: #172033; }}
+    .overtake-date {{ color: #344258; }}
+    .probability {{ padding: 2px 6px; border-radius: 999px; color: #8a5c00; background: #fff5d6; font-weight: 650; }}
+    .range {{ color: #64748b; }}
     #chart {{ min-height: 560px; border: 1px solid #e2e7ee; border-radius: 16px; overflow: hidden; background: #fbfcfe; box-shadow: 0 12px 35px rgba(30, 50, 80, 0.06); }}
     #chart > div, #chart .plot-container, #chart .svg-container {{ width: 100% !important; height: 100% !important; }}
-    footer {{ display: flex; justify-content: space-between; gap: 24px; padding: 14px 8px 0; color: #7a879b; font-size: 0.72rem; line-height: 1.5; }}
-    footer p {{ margin: 0; max-width: 75ch; }}
+    details {{ margin: 10px 8px 0; color: #64748b; font-size: 0.74rem; }}
+    summary {{ cursor: pointer; width: fit-content; color: #52647e; }}
+    .diagnostics {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 9px; }}
+    .diagnostic {{ display: flex; flex-direction: column; gap: 3px; padding: 9px 11px; border: 1px solid #e2e7ee; border-radius: 9px; background: white; }}
+    .diagnostic strong {{ color: #172033; }}
+    .variance-note {{ margin: 8px 0 0; }}
+    footer {{ display: flex; justify-content: space-between; gap: 24px; padding: 12px 8px 0; color: #7a879b; font-size: 0.72rem; line-height: 1.5; }}
+    footer p {{ margin: 0; max-width: 90ch; }}
     a {{ color: #52647e; text-decoration-thickness: 1px; text-underline-offset: 2px; }}
-    @media (max-width: 700px) {{
-      main {{ padding: 22px 12px 14px; grid-template-rows: auto minmax(500px, 1fr) auto; }}
+    @media (max-width: 800px) {{
+      main {{ padding: 22px 12px 14px; grid-template-rows: auto auto minmax(500px, 1fr) auto auto; }}
       header, footer {{ align-items: start; flex-direction: column; gap: 8px; }}
+      .guide {{ align-items: flex-start; flex-direction: column; }}
+      .overtake-summary {{ align-items: flex-start; flex-direction: column; }}
+      .overtake {{ padding: 0; border: 0; }}
+      .diagnostics {{ grid-template-columns: 1fr; }}
       #chart {{ min-height: 500px; border-radius: 12px; }}
     }}
   </style>
@@ -350,9 +434,26 @@ def build_site(csv_path: Path = DEFAULT_CSV, output: Path = Path("site/index.htm
       </div>
       <div class="updated">Updated {escape(latest)} UTC</div>
     </header>
+    <section class="guide" aria-label="How to read the chart">
+      <div class="visual-key">
+        <span class="key-item"><i class="sample history"></i>History</span>
+        <span class="key-item"><i class="sample forecast"></i>Forecast</span>
+        <span class="key-item"><i class="sample range"></i>95% range</span>
+        <span class="key-item"><i class="sample anchor"></i>Observed count</span>
+        <span class="key-item"><i class="sample crossing"></i>Median overtake</span>
+      </div>
+      <div class="overtake-summary">
+        <span class="guide-label">Likely overtakes</span>
+        {crossover_summary}
+      </div>
+    </section>
     <section id="chart" aria-label="Interactive star history chart">{chart}</section>
+    <details>
+      <summary>Forecast methodology and diagnostics</summary>
+      <div class="diagnostics">{model_details}</div>
+    </details>
     <footer>
-      <p>Historical estimates are shaped by GH Archive activity and anchored to aggregate counts recovered from archived GitHub pages. Hollow points are observed anchors; dashed lines and shaded regions are forecasts. Diamonds mark median overtake dates, with pale vertical spans showing conditional 95% date ranges. Forecasts are exploratory, not promises.</p>
+      <p>History is estimated between archived aggregate observations. Overtake ranges are conditional on crossing within six months. Forecasts are exploratory, not promises.</p>
       <p><a href="https://github.com/baszalmstra/pixi-star-history/blob/main/data/star_history.csv">CSV</a> · <a href="https://github.com/baszalmstra/pixi-star-history">Source</a></p>
     </footer>
   </main>
