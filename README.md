@@ -35,6 +35,15 @@ Each repository gets a 183-day forecast from six candidate trend models:
 
 The candidates are evaluated on several recent 30-day historical holdouts. Their weights are inverse to squared backtest error. Forecasts are constrained to be nondecreasing, while 95% ranges combine empirical backtest error and disagreement between candidate models. The graph exposes the strongest model weights and backtest RMSE in forecast tooltips.
 
+Pairwise overtake dates come from 12,000 deterministic Monte Carlo paths per repository. Each path samples a candidate according to its backtested weight and adds temporally accumulated error calibrated to backtest RMSE. Repository errors are sampled independently. For every challenger, the graph reports:
+
+- the probability of overtaking within six months;
+- the median crossing date and star count;
+- a conditional 95% crossing-date range among paths that cross;
+- crossing-date standard deviation and variance.
+
+Diamonds mark median overtake dates and pale vertical bands mark conditional 95% date ranges. Pairings below a 10% six-month crossing probability are omitted from the graph.
+
 These projections extrapolate trends; they are exploratory rather than promises.
 
 ## Local development

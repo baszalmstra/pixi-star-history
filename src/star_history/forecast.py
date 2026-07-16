@@ -28,6 +28,7 @@ class Forecast:
     upper: NDArray[np.float64]
     weights: dict[str, float]
     backtest_rmse: float
+    candidate_predictions: dict[str, NDArray[np.float64]]
 
 
 def trend_slope(values: NDArray[np.float64], window: int) -> float:
@@ -116,4 +117,11 @@ def forecast(values: NDArray[np.float64], horizon: int = 183) -> Forecast:
     lower = np.maximum.accumulate(np.maximum(values[-1], predicted - margin))
     upper = np.maximum.accumulate(predicted + margin)
 
-    return Forecast(predicted, lower, upper, weights, backtest_rmse)
+    return Forecast(
+        predicted,
+        lower,
+        upper,
+        weights,
+        backtest_rmse,
+        final_models,
+    )

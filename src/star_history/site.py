@@ -11,6 +11,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from .collector import DEFAULT_CSV, StarRow, read_rows
+from .crossover import Crossover, pairwise_crossovers
 from .forecast import Forecast, forecast
 
 COLORS = {
@@ -51,7 +52,9 @@ def model_summary(result: Forecast) -> str:
     return f"30-day backtest RMSE: ±{result.backtest_rmse:,.0f} stars<br>{weights}"
 
 
-def add_repository(fig: go.Figure, repository: str, rows: list[StarRow]) -> date:
+def add_repository(
+    fig: go.Figure, repository: str, rows: list[StarRow]
+) -> tuple[date, float, Forecast]:
     dates, values, observations, changes = daily_series(rows)
     result = forecast(values, FORECAST_DAYS)
     color = COLORS[repository]
@@ -148,7 +151,65 @@ def add_repository(fig: go.Figure, repository: str, rows: list[StarRow]) -> date
             legendgroup=repository,
         )
     )
-    return latest_day
+    return latest_day, values[-1], result
+
+
+def add_crossovers(fig: go.Figure, crossovers: list[Crossover]) -> None:
+    """Add probable overtake dates and conditional 95% date ranges."""
+    for crossover in crossovers:
+        if crossover.probability < 0.10 or crossover.median_date is None:
+            continue
+        assert crossover.p05_date is not None
+        assert crossover.p95_date is not None
+        assert crossover.standard_deviation_days is not None
+        assert crossover.variance_days is not None
+        assert crossover.median_stars is not None
+        challenger = LABELS[crossover.challenger]
+        incumbent = LABELS[crossover.incumbent]
+        color = COLORS[crossover.challenger]
+        fig.add_vrect(
+            x0=crossover.p05_date.isoformat(),
+            x1=crossover.p95_date.isoformat(),
+            fillcolor=rgba(color, 0.055),
+            line_width=0,
+            layer="below",
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[crossover.median_date],
+                y=[crossover.median_stars],
+                mode="markers+text",
+                marker={
+                    "symbol": "diamond",
+                    "size": 9,
+                    "color": color,
+                    "line": {"color": "white", "width": 1.5},
+                },
+                text=[f"{challenger} → {incumbent}"],
+                textposition="top center",
+                textfont={"color": color, "size": 11},
+                customdata=[
+                    [
+                        round(crossover.probability, 6),
+                        crossover.p05_date.isoformat(),
+                        crossover.p95_date.isoformat(),
+                        round(crossover.standard_deviation_days, 2),
+                        round(crossover.variance_days, 2),
+                    ]
+                ],
+                hovertemplate=(
+                    f"<b>{challenger} probably overtakes {incumbent}</b><br>"
+                    "Median date: %{x|%e %b %Y}<br>"
+                    "%{customdata[0]:.0%} chance within six months<br>"
+                    "Conditional 95% range: %{customdata[1]}–%{customdata[2]}<br>"
+                    "Date σ: %{customdata[3]:.1f} days<br>"
+                    "Date variance: %{customdata[4]:.0f} days²<br>"
+                    "About %{y:,.0f} stars<extra></extra>"
+                ),
+                showlegend=False,
+                cliponaxis=False,
+            )
+        )
 
 
 def build_figure(rows: list[StarRow]) -> go.Figure:
@@ -159,8 +220,18 @@ def build_figure(rows: list[StarRow]) -> go.Figure:
         raise ValueError("The star-history CSV contains no rows")
 
     figure = go.Figure()
-    latest_days = [add_repository(figure, repository, grouped[repository]) for repository in COLORS]
-    forecast_start = max(latest_days)
+    repository_forecasts = {
+        repository: add_repository(figure, repository, grouped[repository]) for repository in COLORS
+    }
+    forecast_start = max(item[0] for item in repository_forecasts.values())
+    crossovers = pairwise_crossovers(
+        {
+            repository: (current, result)
+            for repository, (_, current, result) in repository_forecasts.items()
+        },
+        forecast_start,
+    )
+    add_crossovers(figure, crossovers)
     figure.add_shape(
         type="line",
         x0=forecast_start.isoformat(),
@@ -275,13 +346,13 @@ def build_site(csv_path: Path = DEFAULT_CSV, output: Path = Path("site/index.htm
     <header>
       <div>
         <h1>Conda, Pixi &amp; Mamba</h1>
-        <p class="subtitle">GitHub star history · dashed lines show a six-month backtested ensemble forecast</p>
+        <p class="subtitle">GitHub star history · six-month ensemble forecasts · probable overtake dates</p>
       </div>
       <div class="updated">Updated {escape(latest)} UTC</div>
     </header>
     <section id="chart" aria-label="Interactive star history chart">{chart}</section>
     <footer>
-      <p>Historical estimates are shaped by GH Archive activity and anchored to aggregate counts recovered from archived GitHub pages. Hollow points are observed anchors; shaded regions are empirical 95% forecast ranges. Forecasts are exploratory, not promises.</p>
+      <p>Historical estimates are shaped by GH Archive activity and anchored to aggregate counts recovered from archived GitHub pages. Hollow points are observed anchors; dashed lines and shaded regions are forecasts. Diamonds mark median overtake dates, with pale vertical spans showing conditional 95% date ranges. Forecasts are exploratory, not promises.</p>
       <p><a href="https://github.com/baszalmstra/pixi-star-history/blob/main/data/star_history.csv">CSV</a> · <a href="https://github.com/baszalmstra/pixi-star-history">Source</a></p>
     </footer>
   </main>
