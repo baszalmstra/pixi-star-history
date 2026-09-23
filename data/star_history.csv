@@ -8925,3 +8925,6 @@ date,repository,stars,daily_change,observation
 2026-09-22,conda/conda,7510,1,snapshot
 2026-09-22,mamba-org/mamba,8097,1,snapshot
 2026-09-22,prefix-dev/pixi,7761,3,snapshot
+2026-09-23,conda/conda,7513,3,snapshot
+2026-09-23,mamba-org/mamba,8098,1,snapshot
+2026-09-23,prefix-dev/pixi,7765,4,snapshot
